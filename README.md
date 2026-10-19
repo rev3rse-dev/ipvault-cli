@@ -13,7 +13,7 @@ pinned in its own files.
 Pick the archive for your platform from [Releases](../../releases), check it, and extract it:
 
 ```sh
-v=0.1.0
+v=0.2.0
 t=x86_64-unknown-linux-musl   # or aarch64-unknown-linux-musl, aarch64-apple-darwin, x86_64-apple-darwin
 curl -fsSLO "https://github.com/rev3rse-dev/ipvault-cli/releases/download/v$v/ipvault-$v-$t.tar.gz"
 curl -fsSLO "https://github.com/rev3rse-dev/ipvault-cli/releases/download/v$v/SHA256SUMS"
@@ -36,6 +36,7 @@ with a browser needs `xattr -d com.apple.quarantine ipvault` before it runs.
 | `ipvault release abandon` | Give up a release that was begun and will not be registered |
 | `ipvault scan` | Find models an app package ships in plaintext. No account needed |
 | `ipvault seal`, `ipvault inspect` | Seal one file; show a sealed file's header |
+| `ipvault app identity` | Read what an app registers with IP Vault from its APK or AAB: the package name and the SHA-256 of each signing certificate. For a bundle, that is the upload key: Play-installed devices present Play's app signing key, shown in Play Console |
 
 `publish` authenticates with the CI job's own OIDC identity on GitHub Actions and GitLab CI, or
 with a CI token in `IPVAULT_TOKEN`; never with a command-line argument. The
