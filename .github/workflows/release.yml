@@ -1,0 +1,197 @@
+name: release
+
+# Builds the `ipvault` CLI that the CI integrations download, from the IP Vault source, and
+# publishes it here with build provenance: a Sigstore-signed SLSA attestation, made by this
+# workflow on GitHub's runners, binding each archive's SHA-256 to this run.
+#
+#   push a tag vX.Y.Z      build the source's tag vX.Y.Z, verify, attest, publish a pre-release
+#   workflow_dispatch      build and verify a source ref only (a dry run); nothing is published
+#
+# The source repository is private until it opens: a read-only deploy key (the secret
+# SOURCE_DEPLOY_KEY) fetches it, and the release notes name the commit built. The build is quiet,
+# so the public log carries no source text. Every binary is run against the fixture pair before
+# anything is published: the leaky APK must exit 1 and the clean one 0 (ci/make-fixtures.py).
+#
+# Kept in the source as ci/public/ipvault-cli/release.yml: edit it there, then copy it here.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: The source branch, tag or commit to build (a dry run)
+        default: main
+
+# Actions are pinned to full commit SHAs, each release at least two weeks old when pinned.
+permissions:
+  contents: read
+
+jobs:
+  # One commit for every build: a tag moved during the run cannot mix two sources.
+  source:
+    runs-on: ubuntu-24.04
+    outputs:
+      commit: ${{ steps.read.outputs.commit }}
+      version: ${{ steps.read.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: rev3rse-dev/ip-vault
+          ref: ${{ github.ref_type == 'tag' && github.ref_name || inputs.source_ref }}
+          ssh-key: ${{ secrets.SOURCE_DEPLOY_KEY }}
+          persist-credentials: false
+      - name: Read the commit and version, and check the version against the tag
+        id: read
+        shell: bash
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)"
+          [[ -n "$version" ]] || { echo "::error::no workspace version in Cargo.toml"; exit 1; }
+          if [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match the source version $version"
+            exit 1
+          fi
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Source commit $(git rev-parse HEAD), version $version"
+
+  build:
+    name: build ${{ matrix.target }}
+    needs: source
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-24.04, run: native }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-24.04, run: qemu }
+          - { target: aarch64-apple-darwin, os: macos-15, run: native }
+          - { target: x86_64-apple-darwin, os: macos-15, run: rosetta }
+    runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ needs.source.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: rev3rse-dev/ip-vault
+          ref: ${{ needs.source.outputs.commit }}
+          ssh-key: ${{ secrets.SOURCE_DEPLOY_KEY }}
+          persist-credentials: false
+
+      - name: Install the toolchain and target
+        shell: bash
+        run: |
+          rustup show active-toolchain > /dev/null || rustup toolchain install
+          rustup target add "${{ matrix.target }}"
+
+      - name: Build
+        shell: bash
+        env:
+          # The musl targets are self-contained; Rust's bundled lld links them, so no C
+          # cross-toolchain is needed for either Linux architecture.
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: rust-lld
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: rust-lld
+        # Source paths in panic messages say ~ for the runner's home. Warnings are silenced, never
+        # code generation: a warning would print source into this public log.
+        run: |
+          RUSTFLAGS="--remap-path-prefix=$HOME=~ -Awarnings" \
+            cargo build --quiet --locked --release -p ipvault-cli --target "${{ matrix.target }}"
+
+      - name: Check that the binary names no build path
+        shell: bash
+        run: |
+          n="$(strings "target/${{ matrix.target }}/release/ipvault" | grep -c "$HOME" || true)"
+          echo "$n strings name $HOME"
+          [[ "$n" == 0 ]]
+
+      - name: Prepare to run a foreign binary
+        shell: bash
+        run: |
+          case "${{ matrix.run }}" in
+            qemu)
+              sudo apt-get update -q > /dev/null
+              sudo apt-get install -y -q --no-install-recommends qemu-user-static > /dev/null ;;
+            rosetta)
+              arch -x86_64 /usr/bin/true 2>/dev/null \
+                || sudo softwareupdate --install-rosetta --agree-to-license ;;
+          esac
+
+      - name: Verify against the fixture pair
+        shell: bash
+        run: |
+          bin="target/${{ matrix.target }}/release/ipvault"
+          case "${{ matrix.run }}" in
+            native) run=("$bin") ;;
+            qemu) run=(qemu-aarch64-static "$bin") ;;
+            rosetta) run=(arch -x86_64 "$bin") ;;
+          esac
+          python3 -I ci/make-fixtures.py "$RUNNER_TEMP/fixtures"
+          got="$("${run[@]}" --version)"
+          [[ "$got" == "ipvault $VERSION" ]] || { echo "::error::--version printed '$got'"; exit 1; }
+          set +e
+          "${run[@]}" scan "$RUNNER_TEMP/fixtures/leaky.apk" > /dev/null; leaky=$?
+          "${run[@]}" scan "$RUNNER_TEMP/fixtures/clean.apk" > /dev/null; clean=$?
+          set -e
+          echo "leaky.apk exit $leaky (want 1), clean.apk exit $clean (want 0)"
+          [[ $leaky == 1 && $clean == 0 ]]
+
+      - name: Package
+        id: package
+        shell: bash
+        run: |
+          name="ipvault-$VERSION-${{ matrix.target }}"
+          mkdir -p "dist/$name"
+          cp "target/${{ matrix.target }}/release/ipvault" LICENSE "dist/$name/"
+          python3 -I ci/third_party_notices.py ipvault-cli "${{ matrix.target }}" "dist/$name/THIRD-PARTY-NOTICES.txt"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          echo "file=dist/$name.tar.gz" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ipvault-${{ matrix.target }}
+          path: ${{ steps.package.outputs.file }}
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    needs: [source, build]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      VERSION: ${{ needs.source.outputs.version }}
+      COMMIT: ${{ needs.source.outputs.commit }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: ipvault-*
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        shell: bash
+        run: |
+          cd dist
+          ls -1 ipvault-*.tar.gz | sort | xargs sha256sum > SHA256SUMS
+          cat SHA256SUMS
+
+      - id: attest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/ipvault-*.tar.gz
+
+      - name: Publish the pre-release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          cp "$BUNDLE" "dist/ipvault-$VERSION.sigstore.json"
+          gh release create "$GITHUB_REF_NAME" dist/ipvault-*.tar.gz dist/SHA256SUMS \
+            "dist/ipvault-$VERSION.sigstore.json" \
+            --repo "$GITHUB_REPOSITORY" --prerelease --title "ipvault $GITHUB_REF_NAME" \
+            --notes "The \`ipvault\` CLI for the CI integrations, built by this repository's release workflow from IP Vault source commit $COMMIT.
+
+          Check an archive's checksum with \`sha256sum -c SHA256SUMS --ignore-missing\`, and its build provenance with \`gh attestation verify <archive> --repo $GITHUB_REPOSITORY\` (or, with the attached bundle, \`--bundle ipvault-$VERSION.sigstore.json\`). Pre-1.0: interfaces may change."
