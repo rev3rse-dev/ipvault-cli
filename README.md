@@ -13,7 +13,7 @@ pinned in its own files.
 Pick the archive for your platform from [Releases](../../releases), check it, and extract it:
 
 ```sh
-v=0.2.0
+v=0.2.1
 t=x86_64-unknown-linux-musl   # or aarch64-unknown-linux-musl, aarch64-apple-darwin, x86_64-apple-darwin
 curl -fsSLO "https://github.com/rev3rse-dev/ipvault-cli/releases/download/v$v/ipvault-$v-$t.tar.gz"
 curl -fsSLO "https://github.com/rev3rse-dev/ipvault-cli/releases/download/v$v/SHA256SUMS"
@@ -47,4 +47,5 @@ Before 1.0, commands and formats may change between minor versions.
 
 ## Licence
 
-Apache License 2.0; see [LICENSE](LICENSE).
+Apache License 2.0; see [LICENSE](LICENSE). Each archive also carries THIRD-PARTY-NOTICES.txt: the
+open-source crates the binary includes, with their licences.
