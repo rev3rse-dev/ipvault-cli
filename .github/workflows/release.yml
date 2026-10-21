@@ -128,11 +128,13 @@ jobs:
           got="$("${run[@]}" --version)"
           [[ "$got" == "ipvault $VERSION" ]] || { echo "::error::--version printed '$got'"; exit 1; }
           set +e
-          "${run[@]}" scan "$RUNNER_TEMP/fixtures/leaky.apk" > /dev/null; leaky=$?
+          "${run[@]}" scan "$RUNNER_TEMP/fixtures/leaky.apk" \
+            --sarif-out "$RUNNER_TEMP/leaky.sarif" --gitlab-sast-out "$RUNNER_TEMP/leaky.sast.json" > /dev/null; leaky=$?
           "${run[@]}" scan "$RUNNER_TEMP/fixtures/clean.apk" > /dev/null; clean=$?
           set -e
           echo "leaky.apk exit $leaky (want 1), clean.apk exit $clean (want 0)"
           [[ $leaky == 1 && $clean == 0 ]]
+          python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); g=json.load(open(sys.argv[2])); assert len(s["runs"][0]["results"]) == 1 and len(g["vulnerabilities"]) == 1; assert s["runs"][0]["invocations"][0]["executionSuccessful"] and g["scan"]["status"] == "success"' "$RUNNER_TEMP/leaky.sarif" "$RUNNER_TEMP/leaky.sast.json"
 
       - name: Package
         id: package
