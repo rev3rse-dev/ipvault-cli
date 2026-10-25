@@ -15,7 +15,7 @@ provenance.
 Pick the archive for your platform from [Releases](../../releases), check it, and extract it:
 
 ```sh
-v=0.3.0
+v=0.3.1
 t=x86_64-unknown-linux-musl   # or aarch64-unknown-linux-musl, aarch64-apple-darwin, x86_64-apple-darwin
 curl -fsSLO "https://github.com/rev3rse-dev/ipvault-cli/releases/download/v$v/ipvault-$v-$t.tar.gz"
 curl -fsSLO "https://github.com/rev3rse-dev/ipvault-cli/releases/download/v$v/SHA256SUMS"
@@ -48,7 +48,7 @@ fetching the attestation from GitHub. Releases before 0.2.2 were built without p
 | `ipvault release publish` | Seal each declared asset on this machine and register its key with IP Vault. The plaintext never leaves the machine |
 | `ipvault release verify` | Check a built package: every sealed output is in it, and no plaintext input is, whole or in part |
 | `ipvault release abandon` | Give up a release that was begun and will not be registered |
-| `ipvault scan` | Find models an app package ships in plaintext. No account needed |
+| `ipvault scan` | Inventory plaintext models, firmware and content candidates, including JSON lesson libraries. No account needed |
 | `ipvault seal`, `ipvault inspect` | Seal one file; show a sealed file's header |
 | `ipvault app identity` | Read what an app registers with IP Vault from its APK or AAB: the package name and the SHA-256 of each signing certificate. For a bundle, that is the upload key: Play-installed devices present Play's app signing key, shown in Play Console |
 
