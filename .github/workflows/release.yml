@@ -135,6 +135,20 @@ jobs:
           echo "leaky.apk exit $leaky (want 1), clean.apk exit $clean (want 0)"
           [[ $leaky == 1 && $clean == 0 ]]
           python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); g=json.load(open(sys.argv[2])); assert len(s["runs"][0]["results"]) == 1 and len(g["vulnerabilities"]) == 1; assert s["runs"][0]["invocations"][0]["executionSuccessful"] and g["scan"]["status"] == "success"' "$RUNNER_TEMP/leaky.sarif" "$RUNNER_TEMP/leaky.sast.json"
+          "${run[@]}" scan "$RUNNER_TEMP/fixtures/library.apk" --json-out "$RUNNER_TEMP/library.json" > /dev/null
+          "${run[@]}" scan "$RUNNER_TEMP/fixtures/config.apk" --json-out "$RUNNER_TEMP/config.json" > /dev/null
+          python3 - "$RUNNER_TEMP/library.json" "$RUNNER_TEMP/config.json" <<'PY'
+          import json, sys
+          library, config = (json.load(open(path)) for path in sys.argv[1:])
+          for report in (library, config):
+              assert report['complete'] and not report['skipped'] and not report['limits_hit']
+          assert library['summary']['content_collections'] == 1
+          finding = library['findings'][0]
+          assert finding['format'] == 'json-library' and finding['confidence'] == 'medium'
+          assert finding['path'].endswith('!/assets/library.json') and not finding['fails_scan']
+          assert config['summary']['content_collections'] == 0 and not config['findings']
+          print('JSON lesson library discovered; configuration negative control clear')
+          PY
 
       - name: Package
         id: package
